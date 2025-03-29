@@ -1,35 +1,65 @@
 import csv
 import sys
+import concurrent.futures
+#Version of my code using Concurrency
 
-    
-def convert_lookup(lookup):
-    """
-    Load tag mappings from CSV file.
-    Handles case-insensitive mappings.
-    """
+def process_chunk(chunk):
+
     lookup_dict = {}
-    
+    for row in chunk:
+        if len(row) == 3:
+            dest = row[0].strip().lower()
+            protocol = row[1].strip().lower()
+            tag = row[2].strip().lower()
+            # Make key a tuple of destination port and protocol and value the tag string
+            key = (dest, protocol) 
+            lookup_dict[key] = tag
+        else:
+            print(f"Skipping malformed row: {row}")
+    return lookup_dict
+
+def split_file_into_chunks(file_path, chunk_size=100):
+
+    chunks = []
     try:
-        with open(lookup, 'r') as f:
+        with open(file_path, 'r') as f:
             reader = csv.reader(f)
             next(reader)
+            chunk = []
             for row in reader:
-                if len(row) == 3:
-                    dest = row[0].strip().lower()
-                    protocol = row[1].strip().lower()
-                    tag = row[2].strip().lower()
-                    # Make key a tuple of destination port and protocol and value the tag string
-                    key = (dest, protocol) 
-                    lookup_dict[key] = tag
-                else:
-                    print(f"Skipping malformed row in lookup file: {row}")
+                chunk.append(row)
+                if len(chunk) == chunk_size:
+                    chunks.append(chunk)
+                    chunk = []
+            if chunk:
+                chunks.append(chunk)
     except FileNotFoundError:
-        print(f"Lookup file not found: {lookup}")
-        return {}
+        print(f"Lookup file not found: {file_path}")
+        return []
     except Exception as e:
         print(f"An error occurred while reading lookup file: {e}")
-        return {}
-    return lookup_dict
+        return []
+    return chunks
+
+def convert_lookup_threads(lookup):
+    chunks = split_file_into_chunks(lookup)
+    combined_lookup_dict = {}
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = {executor.submit(process_chunk, chunk): chunk for chunk in chunks}
+        
+        for future in concurrent.futures.as_completed(futures):
+            chunk = futures[future]
+            try:
+                lookup_dict = future.result()
+            except Exception as e:
+                print(f"An error occurred while processing chunk: {e}")
+            else:
+                combined_lookup_dict.update(lookup_dict)
+    
+    return combined_lookup_dict
+
+    
+
 
 def get_counts(lookup, flow_logs):
     PROTOCOL_MAP = {
@@ -44,7 +74,7 @@ def get_counts(lookup, flow_logs):
     
     tag_counts = {}
     combo_counts = {}
-    lookup_dict = convert_lookup(lookup)
+    lookup_dict = convert_lookup_threads(lookup)
     try:
         with open(flow_logs, 'r') as f:
             for line in f:
